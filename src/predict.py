@@ -1,13 +1,15 @@
-import pickle
 from pathlib import Path
 
+import joblib
 import numpy as np
 import pandas as pd
 
 
-def load_pickle(path: str | Path):
-    with open(path, "rb") as f:
-        return pickle.load(f)
+def load_artifact(path: str | Path):
+    path = Path(path)
+    if not path.exists():
+        raise FileNotFoundError(f"Missing artifact: {path.as_posix()}")
+    return joblib.load(path)
 
 
 def _tenure_group(tenure: pd.Series) -> pd.Series:
@@ -86,8 +88,8 @@ def recommend_action(churn_prob: float) -> str:
 
 
 def predict_churn(customer: dict) -> float:
-    model = load_pickle("models/model.pkl")
-    feature_cols = load_pickle("models/features.pkl")
+    model = load_artifact("models/model.pkl")
+    feature_cols = load_artifact("models/features.pkl")
 
     # Use training-data median to match how `high_value_customer` was computed.
     folds_path = Path("data/train_folds.csv")

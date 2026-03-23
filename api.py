@@ -1,4 +1,5 @@
 from pathlib import Path
+from functools import lru_cache
 
 import joblib
 import numpy as np
@@ -107,8 +108,8 @@ app.add_middleware(
 )
 
 
-@app.on_event("startup")
-def _startup() -> None:
+@lru_cache(maxsize=1)
+def resources():
     model = load_artifact(MODEL_PATH)
     feature_cols = load_artifact(FEATURES_PATH)
 
@@ -120,10 +121,7 @@ def _startup() -> None:
 
     monthly_median, total_median = load_reference_medians()
 
-    app.state.model = model
-    app.state.feature_cols = feature_cols
-    app.state.monthly_median = monthly_median
-    app.state.total_median = total_median
+    return model, feature_cols, monthly_median, total_median
 
 
 class CustomerInput(BaseModel):
@@ -141,14 +139,16 @@ def predict(payload: CustomerInput):
     customer = payload.model_dump()
     df = pd.DataFrame([customer])
 
-    monthly_median = float(getattr(app.state, "monthly_median", 0.0)) or float(df["MonthlyCharges"].iloc[0])
-    total_median = float(getattr(app.state, "total_median", 0.0)) or float(df["TotalCharges"].iloc[0])
+    model, feature_cols, monthly_median, total_median = resources()
+
+    monthly_median = float(monthly_median) or float(df["MonthlyCharges"].iloc[0])
+    total_median = float(total_median) or float(df["TotalCharges"].iloc[0])
 
     feat = make_features(df, monthly_median=monthly_median, total_median=total_median)
     X = pd.get_dummies(feat, drop_first=True)
-    X = X.reindex(columns=app.state.feature_cols, fill_value=0)
+    X = X.reindex(columns=feature_cols, fill_value=0)
 
-    prob = float(app.state.model.predict_proba(X)[:, 1][0])
+    prob = float(model.predict_proba(X)[:, 1][0])
     action = recommend_action(prob)
 
     return {"churn_probability": prob, "action": action}
