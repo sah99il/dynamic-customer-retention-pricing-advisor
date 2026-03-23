@@ -1,11 +1,13 @@
 import argparse
-import pickle
 from pathlib import Path
 
+import joblib
 import numpy as np
 import pandas as pd
 from sklearn.linear_model import LogisticRegression
 from sklearn.metrics import roc_auc_score
+from sklearn.model_selection import StratifiedKFold
+from sklearn.ensemble import RandomForestClassifier
 
 
 def _require_columns(df: pd.DataFrame, cols: list[str]) -> None:
@@ -100,52 +102,76 @@ def main() -> None:
         )
 
     df = pd.read_csv(data_path)
-    _require_columns(df, ["Churn", "kfold"])
+    _require_columns(df, ["Churn"])
 
     target_col = "Churn"
     fold_col = "kfold"
+    drop_cols = [c for c in [target_col, fold_col] if c in df.columns]
 
-    fold_scores: list[float] = []
-    for fold in sorted(df[fold_col].unique()):
-        train_df = df[df[fold_col] != fold].reset_index(drop=True)
-        valid_df = df[df[fold_col] == fold].reset_index(drop=True)
+    X_raw = df.drop(columns=drop_cols)
+    y = df[target_col].values
 
-        monthly_median = float(train_df["MonthlyCharges"].median())
+    skf = StratifiedKFold(n_splits=5, shuffle=True, random_state=42)
 
-        train_feat = make_features(train_df.drop(columns=[target_col, fold_col]), monthly_median)
-        valid_feat = make_features(valid_df.drop(columns=[target_col, fold_col]), monthly_median)
+    def eval_model(model_name: str, model_factory):
+        scores: list[float] = []
+        for fold, (train_idx, valid_idx) in enumerate(skf.split(X_raw, y)):
+            train_df = df.iloc[train_idx].reset_index(drop=True)
+            valid_df = df.iloc[valid_idx].reset_index(drop=True)
 
-        train_X, valid_X = one_hot_align(train_feat, valid_feat)
-        y_train = train_df[target_col].values
-        y_valid = valid_df[target_col].values
+            monthly_median = float(train_df["MonthlyCharges"].median())
 
-        model = LogisticRegression(solver="liblinear", max_iter=1000)
-        model.fit(train_X, y_train)
+            train_feat = make_features(train_df.drop(columns=drop_cols), monthly_median)
+            valid_feat = make_features(valid_df.drop(columns=drop_cols), monthly_median)
 
-        valid_pred = model.predict_proba(valid_X)[:, 1]
-        score = roc_auc_score(y_valid, valid_pred)
-        fold_scores.append(float(score))
-        print(f"Fold {fold}: ROC-AUC={score:.4f}")
+            train_X, valid_X = one_hot_align(train_feat, valid_feat)
+            y_train = train_df[target_col].values
+            y_valid = valid_df[target_col].values
 
-    print(f"Mean ROC-AUC: {np.mean(fold_scores):.4f}")
+            model = model_factory()
+            model.fit(train_X, y_train)
 
-    # Final model on full data
+            valid_pred = model.predict_proba(valid_X)[:, 1]
+            score = roc_auc_score(y_valid, valid_pred)
+            scores.append(float(score))
+            print(f"{model_name} | Fold {fold}: ROC-AUC={score:.4f}")
+
+        mean_score = float(np.mean(scores))
+        print(f"{model_name} | Mean ROC-AUC: {mean_score:.4f}")
+        return mean_score
+
+    lr_mean = eval_model(
+        "Logistic Regression",
+        lambda: LogisticRegression(solver="liblinear", max_iter=1000),
+    )
+    rf_mean = eval_model(
+        "Random Forest",
+        lambda: RandomForestClassifier(n_estimators=200, max_depth=6, random_state=42, n_jobs=1),
+    )
+
+    if rf_mean > lr_mean:
+        best_name = "Random Forest"
+        best_factory = lambda: RandomForestClassifier(n_estimators=200, max_depth=6, random_state=42, n_jobs=1)
+    else:
+        best_name = "Logistic Regression"
+        best_factory = lambda: LogisticRegression(solver="liblinear", max_iter=1000)
+
+    print(f"Best model: {best_name}")
+
+    # Final model on full data (save ONLY the best)
     monthly_median_full = float(df["MonthlyCharges"].median())
-    full_feat = make_features(df.drop(columns=[target_col, fold_col]), monthly_median_full)
+    full_feat = make_features(df.drop(columns=drop_cols), monthly_median_full)
     full_X = pd.get_dummies(full_feat, drop_first=True)
-    y_full = df[target_col].values
+    y_full = y
 
-    final_model = LogisticRegression(solver="liblinear", max_iter=1000)
+    final_model = best_factory()
     final_model.fit(full_X, y_full)
 
     models_dir = Path("models")
     models_dir.mkdir(parents=True, exist_ok=True)
 
-    with open(models_dir / "model.pkl", "wb") as f:
-        pickle.dump(final_model, f)
-
-    with open(models_dir / "features.pkl", "wb") as f:
-        pickle.dump(list(full_X.columns), f)
+    joblib.dump(final_model, models_dir / "model.pkl")
+    joblib.dump(list(full_X.columns), models_dir / "features.pkl")
 
     print(f"Saved model to: {models_dir / 'model.pkl'}")
     print(f"Saved features to: {models_dir / 'features.pkl'}")
@@ -153,4 +179,3 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
-
