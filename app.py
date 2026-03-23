@@ -23,12 +23,12 @@ def validate_inputs(tenure: int, monthly: float, total: float) -> tuple[bool, st
     return True, ""
 
 
-def risk_message(prob: float) -> tuple[str, str]:
+def interpret_churn(prob: float) -> tuple[str, str, str]:
     if prob > 0.7:
-        return "error", "High Risk → Offer Discount"
+        return "High Risk", "Offer Discount", "error"
     if prob >= 0.4:
-        return "warning", "Medium Risk → Engage Customer"
-    return "success", "Low Risk → Retain Normally"
+        return "Medium Risk", "Engage Customer", "warning"
+    return "Low Risk", "Safe Customer", "success"
 
 
 st.set_page_config(page_title="Customer Retention & Pricing Advisor", layout="centered")
@@ -70,21 +70,28 @@ payload = {
 
 st.divider()
 
-if st.button("🚀 Predict Churn", type="primary", use_container_width=True):
+st.subheader("Prediction")
+
+if st.button("\U0001F680 Predict Churn", type="primary", use_container_width=True):
     ok, message = validate_inputs(tenure_i, monthly_f, total_charges)
     if not ok:
-        st.info(message) if "fill" in message.lower() else st.warning(message)
+        st.warning(message) if "valid" in message.lower() else st.info(message)
     else:
         with st.spinner("Predicting..."):
             try:
                 result = call_api(payload)
-                prob = float(result.get("churn_probability"))
-            except Exception:
-                st.warning("⚠️ Backend not available")
+                prob_raw = result.get("churn_probability")
+                prob = float(prob_raw)
+                if not (0.0 <= prob <= 1.0):
+                    raise ValueError("Invalid probability")
+            except (requests.exceptions.RequestException, ValueError, TypeError):
+                st.warning("\u26A0\ufe0f Backend not available")
             else:
-                st.metric("Churn Risk", f"{prob * 100:.1f}%")
-                level, msg = risk_message(prob)
-                getattr(st, level)(msg)
+                risk, recommendation, tone = interpret_churn(prob)
+                st.metric("Churn Probability", f"{prob * 100:.1f}%")
+                st.write(f"Risk Level: **{risk}**")
+                st.write(f"Recommendation: **{recommendation}**")
+                getattr(st, tone)(f"{risk} \u2192 {recommendation}")
 
 st.divider()
 st.caption("Built with FastAPI + Streamlit")
