@@ -6,4 +6,4 @@ joblib
 numpy
 streamlit
 requests
-altair
+altair==4.2.2
