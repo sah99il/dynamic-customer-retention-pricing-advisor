@@ -13,22 +13,28 @@ def call_api(payload: dict) -> dict:
     return resp.json()
 
 
+def validate_inputs(tenure: int, monthly: float, total: float) -> tuple[bool, str]:
+    if tenure < 0 or monthly < 0:
+        return False, "Please enter valid values"
+    if tenure == 0 and monthly == 0.0:
+        return False, "Please fill all required fields"
+    if total > 200000.0:
+        return False, "Please enter valid values"
+    return True, ""
+
+
+def risk_message(prob: float) -> tuple[str, str]:
+    if prob > 0.7:
+        return "error", "High Risk → Offer Discount"
+    if prob >= 0.4:
+        return "warning", "Medium Risk → Engage Customer"
+    return "success", "Low Risk → Retain Normally"
+
+
 st.set_page_config(page_title="Customer Retention & Pricing Advisor", layout="centered")
 
 st.title("Customer Retention & Pricing Advisor")
 st.caption("Predict churn risk and get retention recommendations")
-
-
-def show_risk(prob: float) -> None:
-    if prob > 0.8:
-        st.error("\U0001F525 High Risk \u2192 Give Discount")
-    elif prob > 0.6:
-        st.warning("\u26A0\ufe0f Medium Risk \u2192 Offer Plan")
-    elif prob > 0.4:
-        st.info("\U0001F642 Low Risk \u2192 Engagement Offer")
-    else:
-        st.success("\u2705 Safe Customer")
-
 
 left, right = st.columns(2)
 
@@ -40,7 +46,7 @@ with left:
 
 with right:
     st.subheader("Service Details")
-    internet = st.selectbox("Internet Service", ["DSL", "Fiber optic", "No"], index=1)
+    internet = st.selectbox("Internet Service", ["No", "DSL", "Fiber optic"], index=0)
     payment = st.selectbox(
         "Payment Method",
         ["Electronic check", "Mailed check", "Bank transfer (automatic)", "Credit card (automatic)"],
@@ -48,35 +54,37 @@ with right:
     )
     paperless = st.selectbox("Paperless Billing", ["Yes", "No"], index=0)
 
+tenure_i = int(tenure)
+monthly_f = float(monthly)
+total_charges = float(tenure_i) * monthly_f
+
 payload = {
-    "tenure": int(tenure),
-    "MonthlyCharges": float(monthly),
-    "TotalCharges": float(tenure) * float(monthly),
+    "tenure": tenure_i,
+    "MonthlyCharges": monthly_f,
+    "TotalCharges": total_charges,
     "Contract": str(contract),
-    "InternetService": str(internet),
+    "InternetService": ("No" if internet == "No" else str(internet)),
     "PaymentMethod": str(payment),
     "PaperlessBilling": str(paperless),
 }
 
 st.divider()
 
-if st.button("\U0001F680 Predict Churn"):
-    if payload["tenure"] < 0 or payload["MonthlyCharges"] < 0 or payload["TotalCharges"] < 0:
-        st.warning("Please enter valid values")
-    elif payload["MonthlyCharges"] == 0.0:
-        st.info("Please fill all required fields")
+if st.button("🚀 Predict Churn", type="primary", use_container_width=True):
+    ok, message = validate_inputs(tenure_i, monthly_f, total_charges)
+    if not ok:
+        st.info(message) if "fill" in message.lower() else st.warning(message)
     else:
         with st.spinner("Predicting..."):
             try:
                 result = call_api(payload)
-                churn_prob = float(result.get("churn_probability"))
-            except (requests.exceptions.ConnectionError, requests.exceptions.Timeout, requests.exceptions.HTTPError):
-                st.warning("\u26A0\ufe0f Backend not available")
+                prob = float(result.get("churn_probability"))
             except Exception:
-                st.warning("\u26A0\ufe0f Backend not available")
+                st.warning("⚠️ Backend not available")
             else:
-                st.metric("Churn probability", f"{churn_prob:.4f}")
-                show_risk(churn_prob)
+                st.metric("Churn Risk", f"{prob * 100:.1f}%")
+                level, msg = risk_message(prob)
+                getattr(st, level)(msg)
 
 st.divider()
 st.caption("Built with FastAPI + Streamlit")
